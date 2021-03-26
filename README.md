@@ -1,1 +1,1 @@
-"# spec-trap" 
+# spec-trap
