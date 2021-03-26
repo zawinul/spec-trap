@@ -1,0 +1,583 @@
+desc:paolo spec-trap-3
+//
+// see http://ajaxsoundstudio.com/cookdspdoc/fftin.html
+
+// options:gmem=spectrap
+
+
+import cookdsp.jsfx-inc
+import ui/ui-lib.jsfx-inc
+
+import paolo/spec-trap/map.jsfx-inc
+import paolo/spec-trap/spec-trap-common.jsfx-inc
+import paolo/spec-trap/lib-pv-snap.jsfx-inc
+import paolo/spec-trap/lib-pv-save.jsfx-inc
+import paolo/spec-trap/lib-ui.jsfx-inc
+import paolo/spec-trap/lib-serialize.jsfx-inc
+
+in_pin:left
+in_pin:right 
+out_pin:left
+out_pin:right  
+out_pin:sendleft 
+out_pin:sendright 
+
+slider1: 0<0,1,.001>-x 
+slider2: 0<0,1,.001>-y 
+
+slider4: 0 <0,1,.001>-alpha weight 
+slider5: 0 <24,24,.01>-transp
+slider6: 0 <0,1,.001>-movement delay
+
+slider8:1<0,1,.001>-dry out
+slider9:0<0,1,.001>-send effect
+slider10:0<0,1,.001>-automove speed
+slider11:0<0,3,1>-automove X Y enable
+
+slider12:.5<0,1,.001>-enh center
+slider13:0<-1,1,.001>-enh alpha up
+slider14:0<0,1,.001>-LR offs
+slider15: 0 <-1,1,.001>-vocoder balance
+slider16:0<0,1,.001>-enh center bend
+slider17:0<-1,1,.001>-enh alpha down
+
+slider20: 1 <0,1,.001>-fft show top
+slider21: .5 <0,1,.001>-fft show base
+
+// slider21:0<0,1,.001>-alpha1
+// slider22:0<0,1,.001>-alpha2
+// slider23:0<0,1,.001>-alpha3
+// slider24:0<0,1,.001>-alpha4
+// slider25:0<0,1,.001>-alpha5
+
+options:want_all_kb
+
+//-------------------------------  
+@init
+//-------------------------------
+
+ext_noinit=1;
+log.init();
+
+
+enableRecordOnPlay = 1;
+enableGlobalProcessing = 1;
+enableSingleProcessing = 1;
+enableShowSpectrum = 1;
+enableShowBars = 1;
+enableShowCircles = 1;
+
+enableUI = 1;
+
+MAX_CLIP = 1; // per evitare automute
+
+a000_ui_setup=ui_setup(UI_MEMORY);
+
+function statInit() (
+	aaa.timeFFT = 0;
+	aaa.timeProcessing = 0;
+	aaa.timeGfx = 0;
+	tstart = time_precise();
+);
+
+function pvObjectInit() (
+
+	sprintf(log.get(), "reset fft sz=%d ovl=%d", FFTSIZE, OVERLAPS);
+	resetMemalloc();
+	//_mempoint1=usedMemory();
+	pvin1.pvin(FFTSIZE, OVERLAPS, FFTWIN);
+	pvin2.pvin(FFTSIZE, OVERLAPS, FFTWIN);
+	pvout1.pvout(FFTSIZE, OVERLAPS, FFTWIN);
+	pvout2.pvout(FFTSIZE, OVERLAPS, FFTWIN);
+	//_mempoint2=usedMemory();
+	//a0000_pvspace = _mempoint2-_mempoint1;
+
+);
+
+function mainInit() (
+
+
+
+	statInit();
+
+	saveEnableSound = enableSound;
+	enableSound = 0;
+	reinitRequest = 0; 
+
+	
+	HALF_FFTSIZE = FFTSIZE/2;
+
+
+	initPVSaveLib();
+	initPVSnapLib();
+
+	clock = 0;
+
+	size = FFTSIZE;
+	olaps = OVERLAPS;
+
+	// fftoutleftmag = local_memalloc(MALLOC_DEBUG * FFTSIZE);
+	// fftoutleftfreq = local_memalloc(MALLOC_DEBUG * FFTSIZE);
+	// fftoutrightmag = local_memalloc(MALLOC_DEBUG * FFTSIZE);
+	// fftoutrightfreq = local_memalloc(MALLOC_DEBUG * FFTSIZE);
+
+	// drawLeftSpecBuf = local_memalloc(MALLOC_DEBUG * HALF_FFTSIZE);
+	// drawRightSpecBuf = local_memalloc(MALLOC_DEBUG * HALF_FFTSIZE);
+
+	// enhPivot = local_memalloc(MALLOC_DEBUG * FFTSIZE);
+	// oscilloscopeBuf = local_memalloc(MALLOC_DEBUG * FFTSIZE);
+
+	pvObjectInit();
+
+
+	xPlayLeft = yPlayRight = newmx = newmy = 0;
+
+
+	outFFT = 0;
+	sendFFT = 0;
+
+	interpolatedOutFFT = 0;
+	interpolatedSendFFT = 0;
+
+	recording = 1;
+	soloPoint = -1;
+
+	enableSound = saveEnableSound;
+); 
+
+function slidersToParameters() (
+	 
+	globalTransposeHt = slider5;
+	globalTranspose = pow(2,globalTransposeHt/12);
+
+	alpha1 = slider21;
+	alpha2 = slider22;
+	alpha3 = slider23;
+	alpha4 = slider24;
+	alpha5 = slider25;
+
+	walpha = pow(10, slider4);
+	ftime = 0.01 * pow(1000, slider6); // seconds
+	fsamples = ftime * srate;
+	leftFriction = rightFriction = 1-pow(0.5, 1/fsamples);
+	 
+	fftShowBase = -120 +  slider21*120;
+	fftShowTop = -120 +  slider20*120;
+
+	 //xPlay = slider1;
+	 //yPlay = slider2;
+	 dbDry = -64+64*pow(slider8, .25);
+	 dbSend = -64+64*pow(slider9, .25);
+	 _gainDry = slider8==0 ? 0 : fromdb(dbDry);
+	 _gainSend = slider9==0 ? 0 : fromdb(dbSend);
+
+	 !recording && (autoXValue || autoYValue) ?(
+		  autoMoving = 1;
+		  autoMoveSpeed = (1/60)*pow(60*10, slider10); //RoundsPerSecond
+		  autoMoveInc = 2*$pi*autoMoveSpeed / srate;
+	 ): (
+		  autoMoving = 0;
+	 );
+
+	 LROffset = slider14*slider14*slider14*.5;
+
+	enhCenter = (-1+slider12)*120;
+	enhAlphaDown = pow(30,-slider13); 
+	enhAlphaUp = slider17>0 ? pow(4,slider17):pow(30,slider17); 
+	enhCenterBend = slider16; 
+
+	autoYValue = slider11&2 ? 1 : 0; 
+	autoXValue = slider11&1 ? 1 : 0; 
+	
+	setEnhPivot();
+);
+
+function drawOsc() local (i x cy y) (
+	 drawOscEnabled ? (
+		  gfx_set(255,255,255,.8);
+		  cy = (graphTop+graphBottom)/2;
+		  i=0;
+
+		  loop(FFTSIZE,
+			   x = graphLeft+i*graphWidth/FFTSIZE;
+			   y = oscilloscopeBuf[i]*(graphHeight/2)*drawOscGain;
+			   gfx_line(x, cy, x, cy-y);
+			   i+=1;
+		  );
+	 );
+);
+
+function setHelp() local(i label)(
+	sprintf(STR_HELP1, ""); 
+	sprintf(STR_HELP2, ""); 
+	sprintf(STR_HELP3, ""); 
+	sprintf(STR_HELP4, "");
+	label = pointLabel(curSelected);
+	nHelpStr = 0;
+
+	recording ? ( // rec
+		previewing ? (
+			sprintf(STR_HELP1, "captured spectre \"%s\"", label);
+			nHelpStr = 1;
+		) : (
+			mouseIsInside ? (
+				curSelected<0 ? (
+					sprintf(STR_HELP1, "click to capture a spectre");
+					nHelpStr = 1;
+				) : (
+					sprintf(STR_HELP1, "click to replace spectre \"%s\"", label);
+					sprintf(STR_HELP2, "SHIFT+click to MOVE spectre \"%s\"", label);
+					nHelpStr = 2;
+				);
+			);
+		)
+	 ) : ( // play
+		dragging ? (
+			sprintf(STR_HELP1, "moving spectre \"%s\" ", label);
+			nHelpStr = 1;
+		) : (
+			sprintf(STR_HELP1, "click and drag to interpolate");
+			nHelpStr = 1;
+			curSelected>=0 ? (          
+				sprintf(STR_HELP2, "SHIFT+click to move spectre \"%s\" " , label);
+				sprintf(STR_HELP3, "CTRL+click to edit spectre \"%s\"", label);
+				nHelpStr = 3;
+			);
+		);
+	);
+);
+
+function setInfo() local(i label t) (
+	i=0; loop(10, sprintf(STR_INFO+i, ""); sprintf(STR_POINT_INFO+i, ""); i+=1);
+	label = pointLabel(curSelected);
+	i = 0;
+
+	t = time_precise();
+	t-lastShowCpuLoad >= 1 ? (
+		lastShowCpuLoad = t;
+		aaa.totRatio = (aaa.timeProcessing+aaa.timeGfx)/elapsed();
+		statInit();
+	);
+	sprintf(STR_INFO+i, "CPU: %.2f %%", aaa.totRatio*100);
+	i +=1;
+	
+	previewing ? (
+		sprintf(STR_INFO+i, "captured spectre \"%s\", offset = %d", label, -getSnapRotate);
+		i+=1;
+	);
+	sprintf(STR_INFO+i, "FFT sz: %d, OVL: %d", FFTSIZE, OVERLAPS);
+	i += 1;
+	!recording ? (
+		sprintf(STR_INFO+i, "α weight: %.2f", walpha);
+		i+=1;
+		sprintf(STR_INFO+i, "transpose: %.2f", globalTransposeHt);
+		i+=1;
+	);
+
+	_gainDry==0 
+		? sprintf(STR_INFO+i, "out: -inf dB")
+		: sprintf(STR_INFO+i, "out: %.2f dB", dbDry);
+	i += 1;
+	!recording ? (
+		_gainSend==0 
+			? sprintf(STR_INFO+i, "send: -inf dB")
+			: sprintf(STR_INFO+i, "send: %.2f dB", dbSend);
+		
+		i += 1;
+	);
+
+	snapTuning ? (
+		point = points[curTuningPoint];
+		i = 0;
+		sprintf(STR_POINT_INFO+i,"[%s] %s" , pointLabel(curTuningPoint), STR_POINT_NAMES+curTuningPoint);
+		i += 1;
+
+		sprintf(STR_POINT_INFO+i,"gain: %.2f dB" , discretize(point[SNAP_GAIN]*48));
+		i += 1;
+
+		sprintf(STR_POINT_INFO+i,"pan: %.2f" , point[SNAP_PAN]);
+		i += 1;
+		
+		sprintf(STR_POINT_INFO+i,"lo cut: %.2f Hz", pow(point[SNAP_LO_CUT], 3)*srate/FFTSIZE);
+		i += 1;
+		
+		sprintf(STR_POINT_INFO+i,"hi cut: %.2f Hz", pow(point[SNAP_HI_CUT], 3)*srate/FFTSIZE);
+		i += 1;
+				
+		sprintf(STR_POINT_INFO+i,"gate: %.2f dB" ,  toDb(pow(point[SNAP_BOTTOM_CUT], 6)));
+		i += 1;
+
+		sprintf(STR_POINT_INFO+i,"transpose: %.2f hs" , point[SNAP_TRANSP]);
+		i += 1;
+
+		sprintf(STR_POINT_INFO+i, "x: %.2f, y: %.2f", point[SNAP_X], point[SNAP_Y]);
+		i+=1;
+
+	);
+);
+
+drawOscEnabled = 0;
+drawOscGain = 1;
+
+stopAudio = 0;
+stopDraw = 0;
+
+
+enableSound = 0;
+mainInit();
+enableSound = 1;
+
+//------------------------------------------------------------------------------------
+@slider
+//------------------------------------------------------------------------------------
+slidersToParameters();
+
+//------------------------------------------------------------------------------------
+@block
+//------------------------------------------------------------------------------------
+a01_points = points;
+a01_points0 = points[0];
+a01_points0x = points[0][SNAP_X];
+a01_points0y = points[0][SNAP_Y];
+
+CRASHERROR=npoints>0 && (points[0][SNAP_X]<0 || points[0][SNAP_X] >1 || points[0][SNAP_Y]<0 || points[0][SNAP_Y] >1);
+
+slidersToParameters();
+getMousePosition(); // aggiorna newmx newmy
+
+
+// t = trigger;
+// (t&8) ?
+//      enableUI = 1-enableUI;
+// (t&64) ? checkDynMem();
+// (t&128) ? reinitPvObjects=1;
+
+// (t&256) ? (
+//      fftInDisabled = 1-fftInDisabled;
+// );
+
+// (t&512) ?
+//      statInit();
+
+//------------------------------------------------------------------------------------
+@serialize
+//------------------------------------------------------------------------------------
+
+enableSound = 0;
+SERIALIZE_VERSION = 1;
+
+isRead = file_avail(0)>=0;
+ 
+isRead ? (
+	 file_var(0, x);
+	
+	 x!=SERIALIZE_VERSION ? (
+		 // not managed for now
+		 x=x;
+	 );
+	 FFTSIZE = 2048;
+	 OVERLAPS=4;
+	 file_var(0, x);
+	 x==512 || x==1024 || x==2048 || x==4096 || x==8192 || x==16384 ? (
+		  FFTSIZE=x;
+		  
+		  file_var(0, OVERLAPS);
+
+		   mainInit();
+		   deserializeFFTSnaps();
+		  npoints>0 ? recording = 0;
+	 ) : (
+		  mainInit();
+	 );
+	 ;
+
+) : ( // write
+
+	file_var(0, SERIALIZE_VERSION);
+	file_var(0, FFTSIZE); 
+	file_var(0, OVERLAPS); 
+	serializeFFTSnaps();
+);
+
+enableSound = 1;
+
+
+
+//------------------------------------------------------------------------------------
+@sample
+//------------------------------------------------------------------------------------
+
+reinitPvObjects? (
+	pvObjectInit();
+	reinitPvObjects = 0;
+);
+proc_t = time_precise();
+
+gainDry += (_gainDry-gainDry)*.0001;
+gainSend += (_gainSend-gainSend)*.0001;
+
+xPlayLeft += (newmx-LROffset - xPlayLeft)*leftFriction;
+yPlayLeft += (newmy - yPlayLeft)*leftFriction;
+xPlayRight += (newmx+LROffset - xPlayRight)*rightFriction;
+yPlayRight += (newmy - yPlayRight)*rightFriction;
+
+left = spl0;
+right = spl1; 
+
+// segnali di test per debug
+// sineph += 1;
+// left+=sin(sineph*440*2*$pi/srate)*alpha1*alpha1*alpha1;
+// right+=sin(sineph*440*2*$pi/srate)*alpha1*alpha1*alpha1;
+// left+=sin(sineph*330*2*$pi/srate)*alpha2*alpha2*alpha2;
+// right+=sin(sineph*330*2*$pi/srate)*alpha2*alpha2*alpha2;
+
+autoMoving ? (
+	 autoMovePh += autoMoveInc;
+	 autoMovePh>2*$pi ? autoMovePh-=2*$pi;
+);
+
+
+enableSound ? (
+
+	pvin1.pvin_do(left);
+	pvin2.pvin_do(right);
+
+
+	pvOutLeft = pvout1.pvout_get_output(pvin1.count);
+	pvOutRight = pvout2.pvout_get_output(pvin1.count);
+
+
+	outFFT = gainDry;
+	sendFFT = recording ? 0 : gainSend;
+
+	interpolatedOutFFT += (outFFT-interpolatedOutFFT)*.001;
+	interpolatedSendFFT += (sendFFT-interpolatedSendFFT)*.001;
+
+	spl0 = pvOutLeft  * interpolatedOutFFT;
+	spl1 = pvOutRight * interpolatedOutFFT;
+
+	spl2 = pvOutLeft  * interpolatedSendFFT;
+	spl3 = pvOutRight * interpolatedSendFFT;
+
+	envFolEnabled ? (
+		efIn = toDb(max(abs(left),abs(right)));
+		efIn > efCur 
+			? efCur = min(efIn, efCur+pow(envFolAttack,2)*5000/srate) 
+			: efCur = max(efIn, efCur-pow(envFolRelease,2)*1000/srate);
+		efMult = fromDb(efCur);
+		spl0 *= efMult;
+		spl1 *= efMult;
+		spl2 *= efMult;
+		spl3 *= efMult;
+	);
+
+	pvin1.ready ? (
+	//thePhase = (thePhase+1)%FFTSIZE;
+	//thePhase==0? (
+		recording ? ( // rec
+			previewing ? (
+				snap = points[(curSelected>=0) ? curSelected : npoints-1];
+				fft_t = time_precise();
+				memcpy(drawLeftSpecBuf, snap[SNAP_MLEFT], HALF_FFTSIZE);
+				memcpy(drawRightSpecBuf, snap[SNAP_MRIGHT], HALF_FFTSIZE);
+				pvout1.pvout_do(snap[SNAP_MLEFT],  snap[SNAP_FLEFT]);
+				pvout2.pvout_do(snap[SNAP_MRIGHT],  snap[SNAP_FRIGHT]);
+				aaa.timeFFT += time_precise()-fft_t;
+			): ( 
+				savePV(pvin1.magn, pvin1.freq, pvin2.magn, pvin2.freq);
+				
+				memcpy(drawLeftSpecBuf, pvin1.magn, HALF_FFTSIZE);
+				memcpy(drawRightSpecBuf, pvin2.magn, HALF_FFTSIZE);
+
+				fft_t = time_precise();
+				pvout1.pvout_do (pvin1.magn, pvin1.freq);
+				pvout2.pvout_do(pvin2.magn, pvin2.freq);
+
+				// prova
+				//pvout1.pvout_do(lastInputSnap[SNAP_MLEFT], lastInputSnap[SNAP_FLEFT]);
+				//pvout2.pvout_do(lastInputSnap[SNAP_MRIGHT], lastInputSnap[SNAP_FRIGHT]);
+				aaa.timeFFT += time_precise()-fft_t;
+
+			);
+		) : ( // play
+			savePV(pvin1.magn, pvin1.freq, pvin2.magn, pvin2.freq);
+			interpolateSnaps();
+			
+			//npoints>0 ? interpolateSnapsTrivial() : interpolateSnaps();
+			//interpolateSnapsMinimal();
+
+			fft_t = time_precise();
+			pvout1.pvout_do (outSnap[SNAP_MLEFT],  outSnap[SNAP_FLEFT]);
+			pvout2.pvout_do(outSnap[SNAP_MRIGHT],  outSnap[SNAP_FRIGHT]);
+			aaa.timeFFT += time_precise()-fft_t;
+		);
+	);
+
+	spl0 = clip(spl0, -MAX_CLIP, MAX_CLIP);
+	spl1 = clip(spl1, -MAX_CLIP, MAX_CLIP);
+	spl2 = clip(spl2, -MAX_CLIP, MAX_CLIP);
+	spl3 = clip(spl3, -MAX_CLIP, MAX_CLIP);
+
+
+
+) : (
+	spl0 = spl1 = spl2 = spl3 =0;
+);
+
+
+aaa.timeProcessing += time_precise()-proc_t;
+aaa.procRatio = aaa.timeProcessing/elapsed();
+aaa.fftratio = aaa.timeFFT/elapsed();
+
+
+// --------------------------------------------------
+@gfx 400 200
+// --------------------------------------------------
+
+gfx_t = time_precise();
+gfx_t - lastScrollTime>.5 ? (
+	lastScrollTime = gfx_t;
+	sprintf(log.get(), "");
+);
+
+nowKey= ui_key();
+nowKey!=0 ? lastKey = nowKey;
+!snapTuning && nowKey=='d' &&curSelected>=0 ? duplicateSnap(curSelected); 
+
+gfx_clear=-1;
+
+reinitRequest!=0 ? mainInit();
+
+
+setHelp();
+setInfo();
+enableUI ? do_ui();
+
+gfx_t = time_precise()-gfx_t;
+
+aaa.timeGfx += gfx_t;
+aaa.gfxRatio = aaa.timeGfx/elapsed();
+
+slider1=newmx;
+slider2=newmy;
+
+slidersToParameters();
+
+slider_automate(slider1);
+slider_automate(slider2);
+
+m  = FFTSIZE/srate;
+
+CRASHERROR ? (
+	gfx_set(1,0,0,.3);
+	gfx_rect(0,0,gfx_w,gfx_h);
+);
+// DEBUG ---------------------------------
+
+//drawOscGain = 1/(srate/2);
+//drawOscGain = 1/(HALF_FFTSIZE);
+//ii=0; loop(HALF_FFTSIZE, oscilloscopeBuf[ii] = pvin1.freq[ii]*m; ii+=1);
+//ii=0; loop(HALF_FFTSIZE, oscilloscopeBuf[ii+HALF_FFTSIZE] = outSnap[SNAP_FLEFT]*m*.001; ii+=1);
+
+drawOscEnabled ? drawOsc();
+

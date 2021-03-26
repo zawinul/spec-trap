@@ -1,0 +1,777 @@
+@init
+
+N_INITIAL_PARAMETERS = 100;
+curSelected; 
+
+function pvSnapSize() (
+	N_INITIAL_PARAMETERS+4*HALF_FFTSIZE;
+);
+
+
+function maxPvSnapSize() (
+	N_INITIAL_PARAMETERS+4*(8*1024);
+);
+
+// function setInternalPointers(ptr)   (
+// 	ptr[SNAP_MLEFT] = ptr+N_INITIAL_PARAMETERS;
+// 	ptr[SNAP_FLEFT] = ptr[SNAP_MLEFT] + HALF_FFTSIZE;
+// 	ptr[SNAP_MRIGHT] = ptr[SNAP_FLEFT] + HALF_FFTSIZE;
+// 	ptr[SNAP_FRIGHT] = ptr[SNAP_MRIGHT] + HALF_FFTSIZE;
+// );
+
+POLARITY_FLAG=1;
+IS_INPUT_FLAG=2;
+IS_MUTE_FLAG=4;
+
+SNAP_MLEFT = 0;
+SNAP_FLEFT = 1;
+SNAP_MRIGHT = 2;
+SNAP_FRIGHT = 3;
+SNAP_X = 4;
+SNAP_Y = 5;
+SNAP_GAIN = 7;
+SNAP_PAN = 8;
+SNAP_FLAGS = 9;
+SNAP_TRANSP = 10;
+SNAP_LO_CUT = 11;
+SNAP_HI_CUT = 12;
+SNAP_BOTTOM_CUT = 13;
+SNAP_LETTER = 14;
+
+SNAP_LEFT_WEIGHT = 30;
+SNAP_RIGHT_WEIGHT = 31;
+
+
+function initPVSnap(ptr)  (
+
+	ptr[SNAP_MLEFT] = ptr+N_INITIAL_PARAMETERS;
+	ptr[SNAP_FLEFT] = ptr[SNAP_MLEFT] + HALF_FFTSIZE;
+	ptr[SNAP_MRIGHT] = ptr[SNAP_FLEFT] + HALF_FFTSIZE;
+	ptr[SNAP_FRIGHT] = ptr[SNAP_MRIGHT] + HALF_FFTSIZE;
+
+	
+	ptr[SNAP_X] = 0;
+	ptr[SNAP_Y] = 0;
+	ptr[SNAP_LEFT_WEIGHT] = 0;
+	ptr[SNAP_RIGHT_WEIGHT] = 0;
+	ptr[SNAP_GAIN] = 0;
+	ptr[SNAP_FLAGS] = 0; // flags
+	ptr[SNAP_TRANSP] = 0;
+	ptr[SNAP_LO_CUT] = 0;
+	ptr[SNAP_HI_CUT] = 1;
+	ptr[SNAP_BOTTOM_CUT] = 0;
+
+	ptr;
+);
+
+
+function createPVSnap() local(ptr) (
+
+	ptr = local_memalloc(pvSnapSize());
+	initPVSnap(ptr);
+	ptr;
+);
+
+function initPVSnapLib()(
+
+	outSnap = initPVSnap(OUTSNAP_MEMORY);
+
+	globalTranspose = 1;
+
+	
+	points = local_memalloc(MALLOC_DEBUG * MAX_N_POINTS);
+	npoints = 0;
+);
+
+function pointLabel(i) local(flags lab point) (
+	lab = STR_POINT_LABEL;
+	point = points[i];
+	i<0 ? sprintf(lab, "?") : (
+		flags = point[SNAP_FLAGS] & (IS_ZERO_FLAG | IS_INPUT_FLAG  | POLARITY_FLAG );
+		flags & IS_ZERO_FLAG ? (
+			sprintf(lab, "0 %c" , point[SNAP_LETTER]);
+		) : (
+			flags & IS_INPUT_FLAG ? (
+				flags & POLARITY_FLAG 
+					? sprintf(lab, "-in %c" , point[SNAP_LETTER]) 
+					: sprintf(lab, "in %c" , point[SNAP_LETTER]);
+			):(
+				flags & POLARITY_FLAG 
+					? sprintf(lab, "-%c" , point[SNAP_LETTER]) 
+					: sprintf(lab, "%c" , point[SNAP_LETTER]);
+			)
+		);
+	);
+	lab;
+);
+
+
+function setInputData(destSnap) local(t, srcSnap) (
+	t = (nextSnapIn-1-getSnapRotate+SNAP_QUEUE_LENGTH) % SNAP_QUEUE_LENGTH;
+	t = clip(t, 0, SNAP_QUEUE_LENGTH-1);
+	srcSnap = snapQueue[t];
+	memcpy(destSnap[SNAP_MLEFT], srcSnap[SNAP_MLEFT], HALF_FFTSIZE);
+	memcpy(destSnap[SNAP_FLEFT], srcSnap[SNAP_FLEFT], HALF_FFTSIZE);
+	memcpy(destSnap[SNAP_MRIGHT], srcSnap[SNAP_MRIGHT], HALF_FFTSIZE);
+	memcpy(destSnap[SNAP_FRIGHT], srcSnap[SNAP_FRIGHT], HALF_FFTSIZE);
+);
+
+
+function captureSnap() local(ptr) (
+
+	curSelected<0 ?(
+		// ptr = createPVSnap();
+		ptr = initPVSnap(POINT_MEMORY+npoints*pvSnapSize());
+
+		points[npoints] = ptr;
+		curSelected = npoints;
+		npoints +=1;
+		ptr[SNAP_X] = normx;
+		ptr[SNAP_Y] = normy;
+		ptr[SNAP_LETTER] = 'A' + curSelected;
+		sprintf(STR_POINT_NAMES+curSelected, "spectre %c", ptr[SNAP_LETTER]);
+	) : (
+		ptr = points[curSelected];
+	);
+	setInputData(ptr);
+	ptr[SNAP_LEFT_WEIGHT] = ptr[SNAP_RIGHT_WEIGHT] = 1;	// weight
+);
+
+function computeWeigths() local(i wLeft wRight d dx dy pxLeft pyLeft pxRight pyRight point)(
+	i=0;
+
+	pxLeft = xPlayLeft;
+	pxRight = xPlayRight;
+	pyLeft = yPlayLeft;
+	pyRight = yPlayRight;
+	totalWeightLeft = totalWeightRight = 0;
+	loop(npoints,
+		point = points[i];
+		enabled = (point[SNAP_FLAGS] & IS_MUTE_FLAG) == 0;
+		enabled = enabled && (soloPoint<0 || soloPoint==i);
+
+		dx = point[SNAP_X]-pxLeft;
+		dy = point[SNAP_Y]-pyLeft;
+		d = sqrt(dx*dx+dy*dy);
+		enabled 
+			? wLeft = ((d==0) ? 9999 : pow(1/d, walpha))
+			: wLeft = 0;
+		points[i][SNAP_LEFT_WEIGHT] = wLeft;
+		totalWeightLeft += wLeft;
+
+		dx = point[SNAP_X]-pxRight;
+		dy = point[SNAP_Y]-pyRight;
+		d = sqrt(dx*dx+dy*dy);
+		enabled 
+			? wRight = ((d==0) ? 9999 : pow(1/d, walpha))
+			: wRight = 0;
+		points[i][SNAP_RIGHT_WEIGHT] = wRight;
+		totalWeightRight += wRight;
+		
+		i += 1;
+	);
+);
+
+function setEnhPivot() local(i enhPivotBase) (
+	enhPivotBase = fromDb(enhCenter);
+	i=0;
+	loop(HALF_FFTSIZE,
+		//enhPivot[i] = enhPivotBase; 
+		enhPivot[i] = enhPivotBase*pow(i, -enhCenterBend); 
+		i+=1;
+	);
+);
+
+function interpolateSnaps() local(i j m wLeft wRight mag g 
+	gainLeft gainRight pan polarity m transp mw g m point isInput mleft fleft mright fright a b ga gb
+	y vfa vfb pivot) ( 
+
+	computeWeigths();
+	
+	memset(wbandm_l, 0, HALF_FFTSIZE);
+	memset(wbandf_l, 0, HALF_FFTSIZE);
+	memset(wbandm_r, 0, HALF_FFTSIZE);
+	memset(wbandf_r, 0, HALF_FFTSIZE);
+
+	memset(outSnap[SNAP_MLEFT], 0, HALF_FFTSIZE); // mag
+	memset(outSnap[SNAP_FLEFT], 0, HALF_FFTSIZE); // freq	
+	memset(outSnap[SNAP_MRIGHT], 0, HALF_FFTSIZE); // mag 
+	memset(outSnap[SNAP_FRIGHT], 0, HALF_FFTSIZE); // freq
+	
+	m  = FFTSIZE/srate;
+
+	j = 0; loop (npoints,
+
+		point = points[j];
+		wLeft = point[SNAP_LEFT_WEIGHT];
+		wRight = point[SNAP_RIGHT_WEIGHT];
+
+		// transpose,gain, pan, filter, polarity
+		isInput = point[SNAP_FLAGS] & IS_INPUT_FLAG;
+		mleft = isInput ? lastInputSnap[SNAP_MLEFT] : point[SNAP_MLEFT];
+		fleft = isInput ? lastInputSnap[SNAP_FLEFT] : point[SNAP_FLEFT];
+		mright = isInput ? lastInputSnap[SNAP_MRIGHT] : point[SNAP_MRIGHT];
+		fright = isInput ? lastInputSnap[SNAP_FRIGHT] : point[SNAP_FRIGHT];
+		 
+		transp = point[SNAP_TRANSP];
+		transp = pow(2, transp/12);
+
+		g = fromDb(discretize(point[SNAP_GAIN]*48));
+		pan = point[SNAP_PAN];
+		gainLeft = g*pow(clip(pan+1, 0, 1),3);
+		gainRight = g*pow(clip(1-pan, 0, 1),3);
+
+		loCut = pow(point[SNAP_LO_CUT], 3)*(HALF_FFTSIZE-1);
+		hiCut = pow(point[SNAP_HI_CUT], 3)*(HALF_FFTSIZE-1);
+		bottomCut = pow(point[SNAP_BOTTOM_CUT], 6);
+
+		polarity = (point[SNAP_FLAGS] & POLARITY_FLAG) ? -1 : 1;
+
+		i=0; 
+		loop(HALF_FFTSIZE,
+			freq = fleft[i]*transp*globalTranspose;
+			band = floor(i*transp*globalTranspose);
+
+			band>=0 && band<HALF_FFTSIZE ? (
+				mag = mleft[i];
+				band<loCut || band>hiCut || mag<bottomCut ? mag = 0;
+				
+				mag = mag * wLeft * gainLeft;
+				outSnap[SNAP_MLEFT][band] += mag * polarity;
+				wbandm_l[band] += wLeft; 
+				outSnap[SNAP_FLEFT][band] += mag*freq;
+				wbandf_l[band] += mag;
+			);
+
+			freq = fright[i]*transp*globalTranspose;
+			band = floor(freq*m+.5);
+			band>=0 && band<HALF_FFTSIZE ? (
+				mag = mright[i];
+				band<loCut || band>hiCut || mag<bottomCut ? mag = 0;
+				mag = mag * wRight * gainRight;
+				outSnap[SNAP_MRIGHT][band] += mag * polarity;
+				wbandm_r[band] += wRight; 
+				outSnap[SNAP_FRIGHT][band] += mag*freq;
+				wbandf_r[band] += mag;
+			);
+			i+=1;
+		);
+
+		j+=1;
+	);
+
+	// rebalance everything
+	i=0; loop(HALF_FFTSIZE,
+		wbandm_l[i]>0 ? outSnap[SNAP_MLEFT][i] = abs(outSnap[SNAP_MLEFT][i])/wbandm_l[i] : outSnap[SNAP_MLEFT][i]=0;
+		wbandf_l[i]>0 ? outSnap[SNAP_FLEFT][i] = outSnap[SNAP_FLEFT][i]/wbandf_l[i]      : outSnap[SNAP_FLEFT][i]=0;
+		wbandm_r[i]>0 ? outSnap[SNAP_MRIGHT][i] = abs(outSnap[SNAP_MRIGHT][i])/wbandm_r[i] : outSnap[SNAP_MRIGHT][i]=0;
+		wbandf_r[i]>0 ? outSnap[SNAP_FRIGHT][i] = outSnap[SNAP_FRIGHT][i]/wbandf_r[i]      : outSnap[SNAP_FRIGHT][i]=0;
+
+		i+=1;
+	);
+
+	vocoderEnabled ? (
+
+		// vocoder
+		a = lastInputSnap;
+		b = outSnap;
+		vfa = vocoderBalanceA/(vocoderBalanceA+vocoderBalanceB);
+		vfb = vocoderBalanceB/(vocoderBalanceA+vocoderBalanceB);
+		i=0; 
+		loop(HALF_FFTSIZE,
+			pivot = enhPivot[i];
+
+			ga = a[SNAP_MLEFT][i]/pivot;
+			//ga<1 ? ga=pow(gb, enhAlphaDown) : ga=pow(gb, enhAlphaUp) ;
+			gb = b[SNAP_MLEFT][i]/pivot;
+			gb<1 ? gb=pow(gb, enhAlphaDown) : gb=pow(gb, enhAlphaUp) ;
+			y = pow(ga, vocoderBalanceA)*pow(gb, vocoderBalanceB);
+			b[SNAP_MLEFT][i] = pivot*y;
+
+			ga = a[SNAP_MRIGHT][i]/pivot;
+			//ga<1 ? ga=pow(gb, enhAlphaDown) : ga=pow(gb, enhAlphaUp) ;
+			gb = b[SNAP_MRIGHT][i]/pivot;
+			gb<1 ? gb=pow(gb, enhAlphaDown) : gb=pow(gb, enhAlphaUp) ;
+			y = pow(ga, vocoderBalanceA)*pow(gb, vocoderBalanceB);
+			b[SNAP_MRIGHT][i] = pivot*y;
+			
+			// frequencies are linearly interpolated
+			b[SNAP_FLEFT][i] = a[SNAP_FLEFT][i]*vfa + b[SNAP_FLEFT][i]*vfb;
+			b[SNAP_FRIGHT][i] = a[SNAP_FRIGHT][i]*vfa + b[SNAP_FRIGHT][i]*vfb;
+			
+			i+=1;
+		);
+
+	):(
+		// alpha enhancement
+		enhGreater = enhSmaller = 0;
+		
+		i=0; loop(HALF_FFTSIZE,
+			pivot = enhPivot[i];
+			outSnap[SNAP_MLEFT][i] > pivot ? (
+				outSnap[SNAP_MLEFT][i] *= pow(outSnap[SNAP_MLEFT][i]/pivot, enhAlphaUp-1);
+				enhGreater += 1;
+			) : (
+				outSnap[SNAP_MLEFT][i] *= pow(outSnap[SNAP_MLEFT][i]/pivot, enhAlphaDown-1);
+				enhSmaller+=1;
+			);
+
+			outSnap[SNAP_MRIGHT][i] > pivot ? (
+				outSnap[SNAP_MRIGHT][i] *= pow(outSnap[SNAP_MRIGHT][i]/pivot, enhAlphaUp-1);
+				enhGreater+=1;
+			) : (
+				outSnap[SNAP_MRIGHT][i] *= pow(outSnap[SNAP_MRIGHT][i]/pivot, enhAlphaDown-1);
+				enhSmaller+=1;
+			);
+
+			i+=1;
+		);
+	);
+
+
+
+	memcpy(drawLeftSpecBuf, outSnap[SNAP_MLEFT], HALF_FFTSIZE);
+	memcpy(drawRightSpecBuf, outSnap[SNAP_MRIGHT], HALF_FFTSIZE);	
+);
+
+function interpolateSnapsTrivial() local (point) (
+	memcpy(drawLeftSpecBuf, outSnap[SNAP_MLEFT], HALF_FFTSIZE);
+	memcpy(drawRightSpecBuf, outSnap[SNAP_MRIGHT], HALF_FFTSIZE);	
+	point = points[npoints-1];
+	memcpy(outsnap, point, pvSnapSize());
+);
+
+function interpolateSnapsMinimal() local(i j m wLeft wRight mag g 
+	gainLeft gainRight pan polarity m transp mw g m point isInput mleft fleft mright fright a b ga gb
+	y vfa vfb pivot) ( 
+
+	computeWeigths();
+	
+	memset(wbandm_l, 0, HALF_FFTSIZE);
+	memset(wbandf_l, 0, HALF_FFTSIZE);
+	memset(wbandm_r, 0, HALF_FFTSIZE);
+	memset(wbandf_r, 0, HALF_FFTSIZE);
+
+	memset(outSnap[SNAP_MLEFT], 0, HALF_FFTSIZE); // mag
+	memset(outSnap[SNAP_FLEFT], 0, HALF_FFTSIZE); // freq	
+	memset(outSnap[SNAP_MRIGHT], 0, HALF_FFTSIZE); // mag 
+	memset(outSnap[SNAP_FRIGHT], 0, HALF_FFTSIZE); // freq
+	
+	m  = FFTSIZE/srate;
+
+	j = 0; loop (npoints,
+
+		point = points[j];
+		wLeft = point[SNAP_LEFT_WEIGHT];
+		wRight = point[SNAP_RIGHT_WEIGHT];
+
+		mleft = point[SNAP_MLEFT];
+		fleft = point[SNAP_FLEFT];
+		mright = point[SNAP_MRIGHT];
+		fright = point[SNAP_FRIGHT];
+		 
+		gainLeft = gainRight = 1;
+
+		i=0; 
+		loop(HALF_FFTSIZE,
+			freq = fleft[i];
+			band = floor(freq*m+.5);
+			
+			band>=0 && band<HALF_FFTSIZE ? (
+				mag = mleft[i];
+				band<loCut || band>hiCut || mag<bottomCut ? mag = 0;
+				
+				mag = mag * wLeft * gainLeft;
+				outSnap[SNAP_MLEFT][band] += mag;
+				wbandm_l[band] += wLeft; 
+				outSnap[SNAP_FLEFT][band] += mag*freq;
+				wbandf_l[band] += mag;
+			);
+
+			freq = fright[i]*transp*globalTranspose;
+			band = floor(freq*m+.5);
+			
+			band>=0 && band<HALF_FFTSIZE ? (
+				mag = mright[i];
+				outSnap[SNAP_MRIGHT][band] += mag;
+				wbandm_r[band] += wRight; 
+				outSnap[SNAP_FRIGHT][band] += mag*freq;
+				wbandf_r[band] += mag;
+			);
+			i+=1;
+		);
+
+		j+=1;
+	);
+
+	// rebalance everything
+	i=0; loop(HALF_FFTSIZE,
+		wbandm_l[i]>0 ? outSnap[SNAP_MLEFT][i] = abs(outSnap[SNAP_MLEFT][i])/wbandm_l[i] : outSnap[SNAP_MLEFT][i]=0;
+		wbandf_l[i]>0 ? outSnap[SNAP_FLEFT][i] = outSnap[SNAP_FLEFT][i]/wbandf_l[i]      : outSnap[SNAP_FLEFT][i]=0;
+		wbandm_r[i]>0 ? outSnap[SNAP_MRIGHT][i] = abs(outSnap[SNAP_MRIGHT][i])/wbandm_r[i] : outSnap[SNAP_MRIGHT][i]=0;
+		wbandf_r[i]>0 ? outSnap[SNAP_FRIGHT][i] = outSnap[SNAP_FRIGHT][i]/wbandf_r[i]      : outSnap[SNAP_FRIGHT][i]=0;
+
+		i+=1;
+	);
+
+	memcpy(drawLeftSpecBuf, outSnap[SNAP_MLEFT], HALF_FFTSIZE);
+	memcpy(drawRightSpecBuf, outSnap[SNAP_MRIGHT], HALF_FFTSIZE);	
+);
+
+function getCurrentPoint() local(i dx dy d mind cur alpha enabled) (
+	!previewing  ? (
+		mind=8;
+		curSelected = -1;
+		
+		i = 0;
+		loop(npoints, 
+			dx = (mousex-points[i][SNAP_X]) * graphWidth;
+			dy = (mousey-points[i][SNAP_Y]) * graphHeight;
+			d = sqrt(dx*dx + dy*dy);
+			d<mind ? (
+				mind = d;
+				curSelected = i;
+			);
+			i+=1;
+		);
+	);
+	curSelected;
+);
+
+function drawCircles() local(i j snap x y w n alpha)(
+	NCIRCLES=25;
+	i=0;
+
+	loop(npoints,
+		snap=points[i];
+		x = snap[SNAP_X];
+		y = snap[SNAP_Y];
+		wl = snap[SNAP_LEFT_WEIGHT]/totalWeightLeft;
+		wr = snap[SNAP_RIGHT_WEIGHT]/totalWeightRight;
+		w = (wl+wr)/2;
+		n = floor(w*NCIRCLES+.5);
+		n = min(n, NCIRCLES);
+
+		j=1;
+		x = normToPhisicX(x);
+		y = normToPhisicY(y);
+
+		loop(n,
+			alpha = wl*(n-j)/n;
+			ui_color(128,128,256, alpha);
+			gfx_arc(x-1, y, j*15, -$pi, 0, 1);
+			
+			alpha = wr*(n-j)/n;
+			ui_color(255,128,128, alpha);
+			gfx_arc(x+1, y, j*15, $pi, 0, 1);
+			
+			j += 1;
+		);
+
+		i+=1;
+	);
+);
+
+function drawAutoMovingPath() local(p x y) (
+	ui_color(255, 255, 255, .33);
+
+	p=0;
+	while(
+		x = normToPhisicX(autoXValue ? .5 + sin(p)*.25 : .5);
+		y = normToPhisicY(autoYValue ? .5 + cos(p)*.25 : .5);
+		gfx_line(x,y,x,y); 
+
+		p+=.05;
+		p<2*$pi;
+	);
+);
+
+function drawSnaps() local(i j x y k snap enabled) (
+	getCurrentPoint();
+
+	//ui_colorfont(2,"Arial", 14, "b");
+	i=0;
+	loop(npoints, 
+		snap = points[i];
+
+		enabled = (snap[SNAP_FLAGS] & IS_MUTE_FLAG) == 0;
+		enabled = enabled && (soloPoint<0 || soloPoint==i);
+
+		enabled ? ui_color(255,255,0,1) : ui_color(128,128,128,.7);
+		x = normToPhisicX(snap[SNAP_X]);
+		y = normToPhisicY(snap[SNAP_Y]);
+		gfx_circle(x,y,11,0, 1); 
+
+		// red ring around cur selected
+		i==curSelected ? (
+			ui_color(255,0,0,1);
+			j=0;
+			loop(10, 
+				gfx_circle(x, y, 9+j/3, 0, 1); 
+				j += 1;
+			);
+		);
+		// blue ring around cur selected
+		snapTuning && i==curTuningPoint ? (
+			ui_color(0,0,255,1);
+			j=0;
+			loop(10, 
+				gfx_circle(x, y, 9+j/3, 0, 1); 
+				j += 1;
+			);
+		);
+
+		
+
+		enabled ? ui_color(255,255,0,1) : ui_color(128,128,128,.7);
+		mystr = pointLabel(i);
+
+		gfx_measurestr(mystr, str_w, str_h);
+		gfx_x = x - str_w/2+2;
+		gfx_y = y - str_h/2+1;
+		gfx_drawstr(mystr);
+
+		i += 1;
+	);
+
+	!recording ? (
+		ui_color(0, 255, 0, 1);
+		x = normToPhisicX(newmx);
+		y = normToPhisicY(newmy);
+
+		gfx_line(x-10, y-10, x+10, y+10);
+		gfx_line(x+10, y-10, x-10, y+10);
+		
+		ui_color(128, 128, 255, 1);
+		x = normToPhisicX(xPlayLeft);
+		y = normToPhisicY(yPlayLeft);
+		//gfx_line(x-5, y-5, x+5, y+5);
+		//gfx_line(x-5, y+5, x+5, y-5);
+		gfx_circle(x, y, 4, 0, 1);
+
+		ui_color(255, 128, 128, 1);
+		x = normToPhisicX(xPlayRight);
+		y = normToPhisicY(yPlayRight);
+		//gfx_line(x-5, y-5, x+5, y+5);
+		//gfx_line(x-5, y+5, x+5, y-5);
+		gfx_circle(x, y, 4, 0, 1);
+
+		enableShowCircles ? drawCircles();
+
+		autoMoving ? drawAutoMovingPath();
+	);
+);
+
+function duplicateSnap(index) local(src ptr) (
+	
+	src = points[index];
+	ptr = createPVSnap();
+	points[npoints] = ptr;
+	npoints +=1;
+	
+	memcpy(ptr, src, pvSnapSize());
+	ptr[SNAP_X] = phisicToNormX(normToPhisicX(src[SNAP_X])+25);
+	
+	sprintf(STR_POINT_NAMES+npoints-1, "%s'", STR_POINT_NAMES+index);
+	
+	ptr[SNAP_MLEFT] = ptr+N_INITIAL_PARAMETERS;
+	ptr[SNAP_FLEFT] = ptr[SNAP_MLEFT] + HALF_FFTSIZE;
+	ptr[SNAP_MRIGHT] = ptr[SNAP_FLEFT] + HALF_FFTSIZE;
+	ptr[SNAP_FRIGHT] = ptr[SNAP_MRIGHT] + HALF_FFTSIZE;
+
+	npoints-1;
+	// setInternalPointers(ptr);
+
+);
+
+
+function deleteSnap(index) local() (
+	last = npoints-1;
+	n = last - index;
+	i = index;
+	loop(n,
+		points[i] = points[i+1];
+		strcpy(STR_POINT_NAMES+i, STR_POINT_NAMES+i+1);
+		i +=1;
+	);
+	npoints = npoints-1;
+);
+
+function lin_drawFFT(ptr, left, top, width, height, hswap) local(x y xinc i base buf) (
+	buf = drawFFTBuf;
+
+	i=0;
+	base = top+height;
+	x = hswap ? left+width-1 : left;
+	xinc = hswap ? -width*2/FFTSIZE : width*2/FFTSIZE;
+
+	i=0;
+	loop(HALF_FFTSIZE, 
+		y = toDb(ptr[i]); // pippo
+		y = min(max(fftShowBase, y), fftShowTop);
+		y = (y-fftShowBase)/(fftShowTop-fftShowBase);
+		y = y*height;
+		gfx_line(x, base, x, base-y);
+		x += xinc;
+		i += 1;
+	);
+
+	//show pivot
+	!recording ? (
+		ui_color(255,0,0,1);
+		x = hswap ? left+width-1 : left;
+		i=1;
+		loop(HALF_FFTSIZE, 
+			y = toDb(enhPivot[i]);
+			y = min(max(fftShowBase, y), fftShowTop);
+			y = (y-fftShowBase)/(fftShowTop-fftShowBase);
+			y = y*height;
+			i==1?(
+				gfx_x=x;
+				gfx_y=base-y;
+			):(
+				gfx_lineto(x, base-y);
+			);
+			x += xinc;
+			i += 1;
+		);
+	);
+
+
+);
+
+
+function drawDbScale(left, top, width, height) local(y ydb base) (
+	gfx_setfont(1,"verdana", 10);
+
+	base = top+height;
+	ydb = 6*ceil(fftShowBase/6);
+	while(
+		y = base-(ydb-fftShowBase)/(fftShowTop-fftShowBase)*height;
+		ui_color(128,255,128,.15);
+		gfx_line(left, y, left+width-34, y);
+
+		gfx_x = left+width-30; 
+		gfx_y = y-6; 
+		ui_color(128,255,128,1);
+		gfx_printf("%d dB", ydb); 
+
+		ydb+=6;
+		ydb<fftShowTop;
+	);
+	gfx_setfont(0);
+);
+
+
+function exp_drawFFT(ptr, left, top, width, height) 
+  local(x y i base buf f k kmin kmax lastx curY) (
+
+
+//	  gfx_set(255,255,255);
+//	  gfx_line(left, top, left+width, top+height);
+//	  gfx_line(left+width, top, left, top+height);
+
+	buf = drawFFTBuf;
+	base = top+height;
+	kmax=fToKey(srate/2);
+	kmin=fToKey((srate/2)/HALF_FFTSIZE);
+
+	lastx=left;
+	memset(drawFftBuffer, -1, drawFftBufferSize);
+
+	i=1;
+	loop(HALF_FFTSIZE-1, 
+		f = i*(srate/2)/HALF_FFTSIZE;
+		k = fToKey(f);
+		x = (k-kmin)/(kmax-kmin);
+		x = max(0, min(x,1));
+		x = floor(left + x*width);
+
+		y = ptr[i];
+		drawFftBuffer[x] = max(drawFftBuffer[x], y); 
+
+
+		i+=1;
+	);
+
+	i = drawFftBufferSize-1;
+	curY=0;
+	while(
+		drawFftBuffer[i] >= 0 
+			? curY=drawFftBuffer[i] 
+			: drawFftBuffer[i]=curY;
+		i -=1;
+		i>=0;
+	);
+
+	x=left;
+	loop(width, 
+		y = toDb(drawFftBuffer[x]);
+
+		y = 1 - y/fftShowBase;
+		y = max(0, min(y,1));
+		y *= height;
+		gfx_line(x, base, x, base-y);
+		x += 1;
+	);
+
+);
+
+function drawKbd(left, top, width, height) 
+  local(k kleft kright kmax kmin dy h) (
+
+	kmax=fToKey(srate/2);
+	kmin=fToKey((srate/2)/HALF_FFTSIZE);
+	kshowmin = kmin+24;
+	kshowmax =kmax-12;
+	kwidth = width/(kmax-kmin);
+
+	gfx_set(255,255,255,1);
+	gfx_rect(left,top,width,height);
+
+	k = floor(kmin);
+	while(
+		kleft = left+((k-kmin) - .5)*kwidth;
+		kright = left+((k-kmin) + .5)*kwidth;
+		k12 = k % 12;
+		(k12==1 || k12==3 || k12 == 6 || k12 == 8 || k12 == 10) ?	(
+//			gfx_set(255,255,255,1);
+//			gfx_rect(kleft,top,kright-kleft,height);
+			gfx_set(0,0,0,1);
+			gfx_rect(kleft,top,kright-kleft,height*.65+1);
+		 ) : (
+
+			//gfx_set(255,255,255,1);
+			k == 60? (
+				gfx_set(255,0,0,1);
+				gfx_rect(kleft,top,kright-kleft+1,height);
+			);
+		);
+		k += 1;
+		k<kmax; 
+	);
+
+
+);
+
+
+function restartPh() (
+	pvin1.fftobj.incount = pvin1.fftobj.inputLatency;
+    pvin1.fftobj.count = 0;
+    pvin1.fftobj.overcount = 0;
+
+	pvin2.fftobj.incount = pvin1.fftobj.inputLatency;
+    pvin2.fftobj.count = 0;
+    pvin2.fftobj.overcount = 0;
+
+    pvout1.fftobj.overcount = 0;
+    pvout2.fftobj.overcount = 0;
+
+
+	memset(pvout1.phacc, 0, HALF_FFTSIZE);
+	memset(pvout2.phacc, 0, HALF_FFTSIZE);
+	memset(pvin1.prev, 0, HALF_FFTSIZE);
+	memset(pvin2.prev, 0, HALF_FFTSIZE);
+);
+
+

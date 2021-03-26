@@ -1,0 +1,858 @@
+// see: https://geraintluff.github.io/jsfx-ui-lib/doc/html/
+
+//-------------------------------  
+@init
+//-------------------------------
+
+SLIDERH = 20;
+
+
+function drawHelp() local(x y i stepy) (
+	gfx_setfont(1,"verdana", 14);
+	gfx_set(255,255,255,.5);
+	stepy = 20;
+	x = normToPhisicX(0)+5;
+	y = normToPhisicY(0)-nHelpStr*stepy;
+	i=0;
+	loop(nHelpStr,
+		gfx_x = x; 
+		gfx_y = y; 
+		gfx_drawstr(STR_HELP+i); 
+		y += stepy;
+		i += 1;
+	);
+	gfx_setfont(0);
+);
+
+function drawTuningInfo() local(i x y stepy) (
+	stepy = 16;
+
+	x = normToPhisicX(.5);
+	y = normToPhisicX(0)+5;
+	i=0;
+	loop(10,
+		gfx_x = x; gfx_y = y; gfx_drawstr(STR_POINT_INFO+i); y += stepy;
+		i += 1;
+	);
+);
+
+function showNodeWeight() local(i point x y w h wl wr stepy) (
+	gfx_setfont(1,"verdana", 14);
+	x = normToPhisicX(.75);
+	y = normToPhisicX(0)+5;
+	stepy = 18;
+	w = graphWidth/4-5;
+	h = 16;
+	i=0;
+
+	loop(npoints,
+		point = points[i];
+		gfx_set(255,255,255,.2);
+		gfx_line(x, y, x+w, y);
+		gfx_line(x, y+h, x+w, y+h);
+		gfx_line(x, y, x, y+h);
+		gfx_line(x+w, y, x+w, y+h);
+
+		wl = point[SNAP_LEFT_WEIGHT]/totalWeightLeft;
+		wr = point[SNAP_RIGHT_WEIGHT]/totalWeightRight;
+		gfx_mode=1;
+		gfx_set(0,0,255,.3);
+		gfx_rect(x+2,y+2,(w-4)*wl,h-4);
+		gfx_set(255,0,0,.3);
+		gfx_rect(x+2,y+2,(w-4)*wr,h-4);
+		gfx_mode=0;
+
+		gfx_set(255,255,255,.5);
+		gfx_x = x+3; gfx_y = y; 
+		gfx_drawstr(STR_POINT_NAMES+i); 
+		y += stepy;
+		i += 1;
+	);
+	gfx_setfont(0);
+);
+
+function drawInfo() local(i point x y stepy) (
+
+	gfx_setfont(1,"verdana", 14);
+	gfx_set(255,255,255,.5);
+	x = normToPhisicX(0)+5;
+	y = normToPhisicX(0)+5;
+	stepy = 16;
+
+	i=0;
+	loop(10,
+		gfx_x = x; gfx_y = y; gfx_drawstr(STR_INFO+i); y += stepy;
+		i += 1;
+	);
+
+	snapTuning ? drawTuningInfo() : 
+		((!recording && enableShowBars)? showNodeWeight());
+
+	gfx_setfont(0);
+);
+
+function dragInit() (
+	curSelected>=0 && mouseIsInside ? (
+		dragging = 1;
+		curDragPoint = curSelected;
+		points[curDragPoint][SNAP_X] = normx; 
+		points[curDragPoint][SNAP_Y] = normy; 
+	);
+);
+
+function dragEnd() (
+	dragging = 0;
+);
+
+function tuningInit() (
+	!snapTuning  ? ( // new tuning
+		snapTuning = 1;
+		curSelected<0 ? curSelected=0;
+		curTuningPoint = curSelected;
+	) : (	// change tuning point
+		curTuningPoint = curSelected;
+	);
+);
+
+function tuningEnd() (
+	snapTuning ? (
+		snapTuning = 0;
+ 		curTuningPoint = -1;
+	)
+);
+
+function interpolateInit() (
+
+	!interpolating ? (
+		//...
+		interpolating = 1;
+	);
+);
+
+function interpolateEnd ()(
+	interpolating ? (
+		//...
+		interpolating = 0;
+	);
+);
+
+function previewInit()(
+	!previewing ? (
+		//restartPh();
+		previewing = 1;
+		getSnapRotate = 0;
+		oldGetSnapRotate = -1;
+		previewMouseX = normx;
+	);
+);
+
+function previewEnd()(
+	previewing ? (
+		restartPh();
+		previewing = 0;
+	);
+);
+
+
+function onClickOn(shft ctrl alt) (
+	recording ? (
+		shft+ctrl+alt==0 ? (	// left click when recording => capture
+			captureSnap();
+			previewInit();
+		);
+		shft ? dragInit();
+	):( // play
+		shft+ctrl+alt==0 ? interpolateInit(); 
+		shft ? dragInit();
+		ctrl ? tuningInit();
+	);
+);
+
+function onClickOff() (
+	interpolateEnd();
+	previewEnd();
+	dragEnd();
+);
+
+
+function mousecapChange(val, oldVal) (
+	mouseLeft = mouseIsInside && ((val & 1)==1);
+	oldMouseLeft = mouseIsInside && ((oldVal & 1)==1);
+
+	mouseLeft && ! oldMouseLeft ? (
+		onClickOn(val & 8, val & 4, val & 16); // shift, control, alt
+	);
+
+	!mouseLeft && oldMouseLeft ? (
+		onClickOff();
+	);
+
+	getCurrentPoint();
+);
+
+function labelOnLeft(label) (
+	ui_split_left(50);
+		ui_align(0,0);	
+		ui_color(32,32,64,1);
+		ui_text(label);
+	ui_pop();
+);
+
+function setSlider(val minVal maxVal defVal label)(
+	ui_pad(0, 3, 0, 0);
+	labelOnLeft(label);
+	val = control_slider_x(val, minVal, maxVal, defVal);
+	val;
+);
+
+function setFFTSize(sz, ovl) (
+	(FFTSIZE!=sz) || (OVERLAPS!=ovl) ? (
+		FFTSIZE = sz;
+		OVERLAPS = ovl;
+		reinitRequest = 1;
+	);
+);
+
+function twoStateButton(val label pad opaquestate) local(isPressed wasPressed state) (
+	val ? opaquestate  |= 1 : opaquestate  &= 0xFFFE;
+	wasPressed = opaquestate & 2 != 0;
+
+	//pad>0 ? ui_pad(pad, pad);
+	val ? (
+		control_background_enabled(state);
+		ui_text(label);
+		control_finish_enabled(state);
+	) : (
+		control_background_passive(state);
+		ui_text(label);
+		control_finish_passive(state);
+	);
+	state = control_state();
+	isPressed = strcmp(state, "press")==0; 
+	isPressed ? opaquestate  |= 2 : opaquestate  &= 0xFFFD;
+
+	isPressed && !wasPressed ? opaquestate ~= 1;
+	opaquestate;
+);
+
+function twoStateButtonGetValue(opaquestate) (
+	opaquestate&1;
+);
+
+function ui_showSpectreSliders() (
+	ui_split_topratio(.5);
+		ui_pad(1,0,0,1);
+
+		ui_split_left(40);
+			ui_pad(2,0,0,0);
+			ui_align(0,0);	
+			ui_color(32,32,64,1);
+			ui_text("view");
+		ui_pop();
+		ui_split_right(35);
+			ui_pad(2,0,0,0);
+			ui_align(0,0);	
+			ui_color(32,32,64,1);
+			ui_text("min");
+		ui_pop();
+		slider21 = control_slider_x(slider21, 0, 1, 0);
+		slider20<slider21 ? slider21=slider20;
+	ui_pop();
+		ui_pad(1,0,0,1);
+
+		ui_split_left(40);
+			ui_pad(2,0,2,0);
+			viewSpectExpState = twoStateButton(viewSpectExpValue,"exp",1, viewSpectExpState);
+			viewSpectExpValue = twoStateButtonGetValue(viewSpectExpState);
+		ui_pop();
+		ui_split_right(35);
+			ui_pad(2,0,0,0);
+			ui_align(0,0);	
+			ui_color(32,32,64,1);
+			ui_text("max");
+		ui_pop();
+		slider20 = control_slider_x(slider20, 0, 1, 0);
+		slider20<slider21 ? slider20=slider21;
+	ui_pop();
+
+);
+
+function ui_selectFFTSize() (
+	ui_split_top(50);
+		labelOnLeft("FFT sz");
+		ui_split_topratio(1/3);
+			ui_split_leftratio(.5);
+				ui_pad(0,1,1,1);
+				control_button("512", FFTSIZE!=512) ? setFFTSize(512, OVERLAPS);
+			ui_split_next();
+				ui_pad(1,1,0,1);
+				control_button("1 K", FFTSIZE!=1024) ? setFFTSize(1024, OVERLAPS);
+			ui_pop();
+		ui_split_next();
+			ui_split_leftratio(.5);
+				ui_pad(0,1,1,1);
+				control_button("2 K", FFTSIZE!=2048) ? setFFTSize(2048, OVERLAPS);
+			ui_split_next();
+				ui_pad(1,1,0,1);
+				control_button("4 K", FFTSIZE!=4096) ? setFFTSize(4096, OVERLAPS);
+			ui_pop();
+		ui_split_next();
+			ui_split_leftratio(.5);
+				ui_pad(0,1,1,1);
+				control_button("8 K", FFTSIZE!=8192) ? setFFTSize(8192, OVERLAPS);
+			ui_split_next();
+				ui_pad(1,1,0,1);
+				control_button("16 K", FFTSIZE!=16384) ? setFFTSize(16384, OVERLAPS);
+			ui_pop();
+		ui_pop();
+	ui_pop();
+
+	ui_split_top(4);ui_pop();
+
+	// ui_split_top(20);
+	// 	labelOnLeft("overlap");
+	// 	ui_split_leftratio(1/3);
+	// 		ui_pad(0,1,1,1);
+	// 		control_button("2", OVERLAPS!=2) ? setFFTSize(FFTSIZE, 2);
+	// 	ui_split_next();
+	// 		ui_pad(1,1,1,1);
+	// 		control_button("4", OVERLAPS!=4) ? setFFTSize(FFTSIZE, 4);
+	// 	ui_split_next();
+	// 		ui_pad(1,1,0,1);
+	// 		control_button("8", OVERLAPS!=8) ? setFFTSize(FFTSIZE, 8);
+	// 	ui_pop();
+	// ui_pop();
+);
+
+function ui_selectOverlaps() (
+	ui_split_top(SLIDERH);
+		ui_pad(0, 3, 0, 0);
+		labelOnLeft("overl");
+		ovl = OVERLAPS;
+		ui_split_leftratio(1/3);
+			ovl2state = twoStateButton(ovl==2?1:0,"2",1, ovl2state);
+			twoStateButtonGetValue(ovl2state) ? ovl = 2;
+		ui_split_next();
+			ovl4state = twoStateButton(ovl==4?1:0,"4",1, ovl4state);
+			twoStateButtonGetValue(ovl4state) ? ovl = 4;
+		ui_split_next();
+			ovl8state = twoStateButton(ovl==8?1:0,"8",1, ovl8state);
+			twoStateButtonGetValue(ovl8state) ? ovl = 8;
+		ui_pop();
+		ovl!=OVERLAPS ? (
+			OVERLAPS = ovl;
+			reinitPvObjects=1;
+		);
+	ui_pop();
+
+
+);
+
+function ui_record_panel() (
+	//ui_font("calibri", 13, 0, 0);
+	ui_color(200, 200, 200, 1);
+	ui_fill();
+	ui_pad(8,8);
+
+	ui_split_top(30);
+		ui_split_leftratio(.75);
+			ui_pad(0, 0, 3, 0);
+			control_button("PLAY", npoints>0) ? recording=0;
+		ui_pop();
+			control_button("ph=0") ? reinitPvObjects=1;
+	ui_pop();
+
+	ui_split_top(16);
+	ui_pop();
+
+	npoints==0 ? ui_selectFFTSize();
+	ui_selectOverlaps();
+	// npoints>0 ? (
+	// 	ui_split_top(14);
+	// 	sprintf(STR_TEMP_LABEL, "FFT sz: %d, OVL: %d", FFTSIZE, OVERLAPS);
+	// 	ui_color(0,0,64);
+	// 	ui_text(STR_TEMP_LABEL);
+	// 	ui_pop();
+	// );
+
+
+	ui_split_top(SLIDERH);
+		slider8 = setSlider(slider8, 0, 1, 1, "out");
+	ui_pop();
+
+	ui_split_top(20);
+	ui_pop();
+
+//	ui_split_top(20);
+//		control_button("reset ph") ? restartPh();
+//	ui_pop();
+	
+	ui_split_bottom(35);
+		control_button("reset all") ? reinitRequest=1;
+	ui_pop();
+
+
+	ui_split_bottom(SLIDERH*2);
+		ui_pad(0,0,0,4);
+		ui_showSpectreSliders();
+	ui_pop();
+
+
+	ui_pop();
+);
+
+
+function ui_play_panel() local(x,y) (
+	ui_split_top(30);
+		ui_split_leftratio(1/3);
+			ui_pad(0,0,1,0);
+			control_button("REC") ? (
+				restartPh();
+				recording = 1;
+				autoMoving = 0;
+				fftInDisabled = 0;
+			);
+		ui_split_next();
+			control_button("ph=0") ? reinitPvObjects=1;
+		ui_pop();
+		ui_pad(1,0,0,0);
+		control_button("edit") ? tuningInit();
+	ui_pop();
+
+	ui_selectOverlaps();
+
+	ui_split_top(SLIDERH);
+		slider4 = setSlider(slider4, 0, 1, 0, "α weight");
+	ui_pop();
+
+	
+	ui_split_top(SLIDERH);
+		transpHS = floor(setSlider(transpHS, -24, 24, 0, "trnsp HS"));
+	ui_pop();
+	ui_split_top(SLIDERH);
+		transpCents = floor(setSlider(transpCents, -100, 100, 0, "trnsp cts"));
+	ui_pop();
+	slider5 = transpHS+transpCents/100;
+	
+	
+	ui_split_top(SLIDERH);
+		slider6 = setSlider(slider6, 0, 1, 0, "glide");
+	ui_pop();
+
+	ui_split_top(SLIDERH);
+		ui_pad(0, 3, 0, 0);
+		labelOnLeft("auto mv");
+		ui_split_right(16);
+			ui_pad(1,0,1,0);
+			autoYState = twoStateButton(autoYValue,"Y",1, autoYState);
+			autoYValue = twoStateButtonGetValue(autoYState);
+			
+			ui_split_next();
+			ui_pad(1,0,1,0);
+			autoXState = twoStateButton(autoXValue,"X",1, autoXState);
+			autoXValue = twoStateButtonGetValue(autoXState);
+
+			slider11 = (autoYValue ? 2 : 0) + (autoXValue ? 1 : 0);
+		ui_pop();
+		slider10 = control_slider_x(slider10, 0, 1, 0);
+	ui_pop();
+
+	ui_split_top(SLIDERH);
+		slider14 = setSlider(slider14, 0, 1, 0, "LR offs");
+	ui_pop();
+
+
+	ui_split_top(SLIDERH);
+		slider12 = setSlider(slider12, 0, 1, .5, "enh center");
+	ui_pop();
+	ui_split_top(SLIDERH);
+		slider16 = setSlider(slider16, 0, 1, 0, "enh ctr bend");
+	ui_pop();
+	ui_split_top(SLIDERH);
+		slider17 = setSlider(slider17, -1, 1, 0, "enh α ▲");
+	ui_pop();
+	ui_split_top(SLIDERH);
+		slider13 = setSlider(slider13, -1, 1, 0, "enh α ▼");
+	ui_pop();
+
+	ui_split_top(SLIDERH);
+		ui_pad(0, 3, 0, 0);
+		//labelOnLeft("gears");
+		ui_split_leftratio(1/6);
+			g1state = twoStateButton(enableRecordOnPlay || vocoderEnabled,"r",1, g1state);
+			enableRecordOnPlay = twoStateButtonGetValue(g1state);
+			fftInDisabled = !enableRecordOnPlay;
+		ui_split_next();
+			g2state = twoStateButton(enableGlobalProcessing,"p",1, g2state);
+			enableGlobalProcessing = twoStateButtonGetValue(g2state);
+		ui_split_next();
+			g3state = twoStateButton(enableSingleProcessing,"ps",1, g3state);
+			enableSingleProcessing = twoStateButtonGetValue(g3state);
+		ui_split_next();
+			g4state = twoStateButton(enableShowSpectrum,"ws",1, g4state);
+			enableShowSpectrum = twoStateButtonGetValue(g4state);
+		ui_split_next();
+			g5state = twoStateButton(enableShowBars,"wb",1, g5state);
+			enableShowBars = twoStateButtonGetValue(g5state);
+		ui_split_next();
+			g6state = twoStateButton(enableShowCircles,"wc",1, g6state);
+			enableShowCircles = twoStateButtonGetValue(g6state);
+		ui_pop();
+	ui_pop();
+
+	ui_split_top(SLIDERH);
+		slider8 = setSlider(slider8, 0, 1, 1, "out");
+	ui_pop();
+	
+	ui_split_top(SLIDERH);
+		slider9 = setSlider(slider9, 0, 1, 1, "send");
+	ui_pop();
+
+	ui_split_top(5);
+	ui_pop();
+
+	// vocod+ef buttons 
+	ui_split_top(SLIDERH);
+		ui_pad(0, 3,0, 0);
+		ui_split_left(50);
+			ui_pad(0,0,2,0);
+			vocoderState = twoStateButton(vocoderEnabled, "VCOD", 2, vocoderState);
+			vocoderEnabled = twoStateButtonGetValue(vocoderState);
+			vocoderEnabled?	envFolEnabled = 0;
+		ui_split_next();
+			ui_pad(2,0,0,0);
+			envFolState = twoStateButton(envFolEnabled, "E F", 2, envFolState);
+			envFolEnabled = twoStateButtonGetValue(envFolState);
+		ui_pop();
+		envFolEnabled?(
+			vocoderEnabled=0;
+			x = clip(efCur,-54,0)/54+1;
+			ui_color(128,128,255,.5);
+			gfx_rect(ui_left(), ui_top(), ui_width()*x, ui_height());
+		);
+	ui_pop();
+
+	
+
+	envFolEnabled ? ( // ef sliders
+		ui_split_top(SLIDERH);
+			envFolAttack = setSlider(envFolAttack, 0, 1, 0, "attack");
+		ui_pop();
+		ui_split_top(SLIDERH);
+			envFolRelease = setSlider(envFolRelease, 0, 1, 0, "release");
+		ui_pop();
+	);
+
+	vocoderEnabled ? ( // vocod slider 
+		ui_split_top(SLIDERH);
+			slider15 = setSlider(slider15, -1, 1, 0, "balance");
+			vocoderBalanceA = slider15>0 ? 1-slider15:1;
+			vocoderBalanceB = slider15<0 ? 1+slider15:1;
+		ui_pop();
+	);
+
+	ui_split_bottom(35);
+		control_button("reset all") ? reinitRequest=1;
+	ui_pop();
+
+	ui_split_bottom(SLIDERH*2);
+		ui_pad(0,4,0,4);
+		ui_showSpectreSliders();
+	ui_pop();
+);
+
+transpht = 0;
+transpcent = 0;
+
+
+function ui_fine_tuning_panel() local(point istate gain pan lo_cut hi_cut transp transpcent transpht)(
+
+	point = points[curTuningPoint];
+
+	ui_split_top(40);
+		curTuningPoint = control_selector(
+			curTuningPoint, 
+			STR_POINT_NAMES+curTuningPoint, 
+			(curTuningPoint+npoints-1)%npoints,
+			(curTuningPoint+1)%npoints 
+		);
+		soloPoint>=0 ? soloPoint = curTuningPoint;
+	ui_pop();
+
+	ui_split_top(SLIDERH);
+	point[SNAP_GAIN]  = setSlider(point[SNAP_GAIN], -1, 1, 0, "gain");
+	ui_pop();
+
+	ui_split_top(SLIDERH);
+	point[SNAP_PAN]   = setSlider(point[SNAP_PAN], -1, 1, 0, "pan");
+	ui_pop();
+
+	ui_split_top(SLIDERH);
+	point[SNAP_LO_CUT]   = setSlider(point[SNAP_LO_CUT], 0, 1, 0, "lo cut");
+	ui_pop();
+
+	ui_split_top(SLIDERH);
+	point[SNAP_HI_CUT]   = setSlider(point[SNAP_HI_CUT], 0, 1, 1, "hi cut");
+	ui_pop();
+
+	ui_split_top(SLIDERH);
+	point[SNAP_BOTTOM_CUT] = setSlider(point[SNAP_BOTTOM_CUT], 0, 1, 1, "pow cut");
+	ui_pop();
+
+	transpht = floor(point[SNAP_TRANSP] + .5);
+	transpcent = point[SNAP_TRANSP]-transpht;
+	transpcent = floor(transpcent*100 + .5);
+	transpcent = clip(transpcent, -50, 50);	
+
+	ui_split_top(SLIDERH);
+		transpht = setSlider(transpht, -24, 24, 0, "tr.step");
+		transpht = floor(transpht+.5);
+	ui_pop();
+
+	ui_split_top(SLIDERH);
+		transpcent  = setSlider(transpcent, -50, 50, 0, "tr.cent");
+		transpcent = floor(transpcent+.5);
+	ui_pop();
+	
+	point[SNAP_TRANSP] = transpht+transpcent/100;
+
+	ui_split_top(12); 
+	ui_pop();
+
+	ui_split_top(20);
+		labelOnLeft("name");
+		istate = control_textinput(STR_POINT_NAMES+curTuningPoint, istate);
+		istate = control_textinput_focus(istate);
+	ui_pop();
+
+
+
+	ui_split_top(12); 
+	ui_pop();
+
+	ui_split_top(20);
+		ui_split_leftratio(1/4);
+			muteValue = (point[SNAP_FLAGS] & IS_MUTE_FLAG)!=0;
+			muteState = twoStateButton(muteValue, "M", 2, muteState);
+			muteValue = twoStateButtonGetValue(muteState);
+			muteValue ? point[SNAP_FLAGS] |= IS_MUTE_FLAG : point[SNAP_FLAGS] &= 0xFFFF~IS_MUTE_FLAG;
+		ui_split_next();
+			soloValue = soloPoint == curTuningPoint;
+			soloState = twoStateButton(soloValue, "S", 2, soloState);
+			tmp = twoStateButtonGetValue(soloState);
+			!soloValue && tmp ? soloPoint = curTuningPoint;  
+			soloValue && !tmp ? soloPoint = -1;  
+			soloValue = tmp;
+		ui_split_next();
+			polarityValue = (point[SNAP_FLAGS] & POLARITY_FLAG)!=0;
+			polarityState = twoStateButton(polarityValue, "+/-", 2, polarityState);
+			polarityValue = twoStateButtonGetValue(polarityState);
+			polarityValue ? point[SNAP_FLAGS] |= POLARITY_FLAG : point[SNAP_FLAGS] &= 0xFFFF~POLARITY_FLAG;
+		ui_split_next();
+			isInputValue = (point[SNAP_FLAGS] & IS_INPUT_FLAG)!=0;
+			isInputState = twoStateButton(isInputValue, "in", 2, isInputState);
+			isInputValue = twoStateButtonGetValue(isInputState);
+			isInputValue ? point[SNAP_FLAGS] |= IS_INPUT_FLAG : point[SNAP_FLAGS] &= 0xFFFF~IS_INPUT_FLAG;
+		ui_pop();
+	ui_pop();
+
+	ui_split_top(12); 
+	ui_pop();
+	ui_split_top(20); 
+		ui_split_leftratio(1/2);
+			ui_pad(1,0);
+			control_button("duplicate", 1) ? (
+				curTuningPoint = duplicateSnap(curTuningPoint);
+			);
+		ui_split_next();
+			ui_pad(1,0);
+			control_button("delete", 1) ? (
+				deleteSnap(curTuningPoint);
+				npoints==0 ? tuningEnd() : curTuningPoint=mod(curTuningPoint-1, npoints);
+			);
+		ui_pop();
+	ui_pop();
+
+	// ui_split_top(14);
+	// 	sprintf(STR_TEMP_LABEL, "FFT sz: %d, OVL: %d", FFTSIZE, OVERLAPS);
+	// 	ui_color(0,0,64);
+	// 	ui_text(STR_TEMP_LABEL);
+	// ui_pop();
+
+	ui_split_bottom(35);
+		control_button("close") ? tuningEnd();
+	ui_pop();
+
+	ui_split_bottom(SLIDERH*2);
+		ui_pad(0,4,0,4);
+		ui_showSpectreSliders();
+	ui_pop();
+
+);
+
+function setSliders() local(enab) (
+	snapTuning 	? ui_color(255, 255, 200, 1) : ui_color(220, 220, 220, 1);
+	ui_fill();
+	ui_pad(8,8);
+
+	snapTuning ? (
+		ui_fine_tuning_panel();
+	) : (
+		recording ? ui_record_panel() : ui_play_panel();
+	);
+	ui_pop();
+);
+
+function getMousePosition() local(snap) (
+	normx = ui_mouse_x()/ui_width();
+	normy = 1-(ui_mouse_y()/ui_height());
+	mouseIsInside = (normx>=0) && (normy>=0) && (normx<=1) && (normy<=1);
+	
+	// newmx/newmy = position of last click (green cross)
+	newmx = slider1;
+	newmy = slider2;
+	
+
+
+	mouseIsInside  ? (
+		mousex = normx;
+		mousey = normy;
+		interpolating || autoMoving ? (
+			newmx = normx;
+			newmy = normy;
+		);
+	);
+
+	autoMoving ? (
+		newmx = autoXValue ? .5 + sin(autoMovePh)*.25 : .5;
+		newmy = autoYValue ? .5 + cos(autoMovePh)*.25 : .5;
+		mouseIsInside = 1;
+	);
+
+	previewing ? (
+		dx = previewMouseX-normx;
+		dx = max(0, min(dx, .5));
+		getSnapRotate = floor(dx*2*(SNAP_QUEUE_LENGTH-1));
+		oldGetSnapRotate!=getSnapRotate ? setInputData(points[npoints-1]);
+		oldGetSnapRotate=getSnapRotate;
+	);
+	
+	getCurrentPoint();
+	
+	mouse_cap!=oldMousecap ? (
+		mousecapChange(mouse_cap, oldMousecap);
+		oldMousecap = mouse_cap;
+	);
+
+	dragging ? ( 
+		snap = points[curDragPoint];
+		snap[SNAP_X] = mousex;
+		snap[SNAP_Y] = mousey;
+	);
+);
+
+function drawCurSnap() local(str_w str_h fontSize) (
+	sprintf(STR_CUR_SNAP, pointLabel(curSelected));
+	
+	fontSize = min(graphWidth, graphHeight)*.7;
+	fontSize= min(255, fontSize); // altrimenti sembra ci sia un problema con la libreria
+	gfx_setfont(3,"arial", fontSize, 'b');
+	gfx_measurestr(STR_CUR_SNAP, str_w, str_h);
+	gfx_x = normToPhisicX(.5) - str_w/2;
+	gfx_y = normToPhisicY(.5) - str_h/2;
+	ui_color(255,255,0,.3);
+	gfx_printf(STR_CUR_SNAP);
+	gfx_setfont(1);
+);
+
+function do_ui()(
+	npoints<0 ? recording=1;
+	ui_start("main");
+	ui_screen() == "main" ? (
+		//right
+		ui_split_right(180);
+
+		setSliders();
+		ui_pop();
+
+		ui_push_clip();
+			!recording ? ui_color(0, 0, 64, 1);
+			recording && !previewing ? ui_color(64, 0, 0, 1);
+			previewing ? ui_color(0, 0, 0, 1);
+
+			ui_fill(); 
+			graphWidth = ui_width();
+			graphHeight = ui_height();
+			graphLeft = ui_left();
+			graphTop = ui_top();
+			graphRight = ui_right();
+			graphBottom = ui_bottom();
+			
+			getMousePosition();
+
+			previewing ? drawCurSnap();
+			drawHelp();
+			drawInfo();
+			drawSnaps();
+			log.draw();
+
+			fftH=.5;
+			enableShowSpectrum ? (
+				viewSpectExpValue ? (
+					fftH=.5;
+					drawKbd(ui_left(), ui_bottom()-10, ui_width(), 10); 
+					ui_color(255, 128, 0, .25);
+					gfx_mode=1;
+					exp_drawFFT(drawLeftSpecBuf, 
+						ui_left(), 
+						ui_top()+ui_height()*(1-fftH)-10, 
+						ui_width(), ui_height()*fftH);
+
+					ui_color(0, 128, 255, .25);
+					exp_drawFFT(drawRightSpecBuf, 
+						ui_left(), 
+						ui_top()+ui_height()*(1-fftH)-10, 
+						ui_width(), ui_height()*fftH);
+
+					gfx_mode=0;
+				):(
+					fftH=.33;
+					ui_color(128,255,128,.35);
+
+					drawDbScale(
+						ui_left(), 
+						ui_top()+ui_height()*(1-fftH), 
+						ui_width(), 
+						ui_height()*fftH
+					);
+					ui_color(255, 128, 128, .15);
+					lin_drawFFT(drawLeftSpecBuf, 
+						ui_left(), 
+						ui_top()+ui_height()*(1-fftH), 
+						ui_width()/2, 
+						ui_height()*fftH, 
+						1);
+
+					ui_color(128, 255, 128, .15);
+					lin_drawFFT(drawRightSpecBuf, 
+						ui_left()+ui_width()/2, 
+						ui_top()+ui_height()*(1-fftH), 
+						ui_width()/2, 
+						ui_height()*fftH, 
+						0);
+				);
+
+			);
+
+
+		ui_pop();
+
+	);
+
+	ui_screen() == "secondary" ? (
+		control_button("close screen") ? ui_screen_close();
+	);
+
+	ui_screen() == "sys" ? ui_system();
+);
+

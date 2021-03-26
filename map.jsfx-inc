@@ -1,0 +1,30 @@
+@init
+
+SNAP_QUEUE_LENGTH = 30;
+MAX_N_POINTS=25;
+
+drawFftBufferSize = 10000;
+
+
+FFT_MEMORY             = 0; // gestita con memalloc, size 1 mega circa
+DRAW_FFT_BUFFER_MEMORY = 1010000; // 10 k
+POINT_MEMORY           = 1020000; // size circa 1 mega (25 punti a 16k = 821700)
+QUEUE_MEMORY           = 2000000; // size circa 1m  (25 punti a 16k = 986040)
+LOG_MEMORY             = 3000000; // size 10
+
+drawFFTBuf 			   = 3000100; // size  HALF_FFTSIZE, max 8k
+
+wbandm_l 			   = 3000100; // size  HALF_FFTSIZE, max 8k
+wbandf_l 			   = 3010000; // size  HALF_FFTSIZE, max 8k
+wbandm_r 			   = 3020000; // size  HALF_FFTSIZE, max 8k
+wbandf_r 			   = 3030000; // size  HALF_FFTSIZE, max 8k
+
+drawLeftSpecBuf 	   = 3040000; // size  HALF_FFTSIZE, max 8k
+drawRightSpecBuf	   = 3050000; // size  HALF_FFTSIZE, max 8k
+oscilloscopeBuf	       = 3060000; // size  FFTSIZE, max 16k
+enhPivot 	       	   = 3080000; // size  FFTSIZE, max 16k
+
+OUTSNAP_MEMORY		   = 3100000;
+
+local_memalloc_start   = 4000000;
+UI_MEMORY              = 7000000; // size  circa 3k

@@ -1,0 +1,249 @@
+//-------------------------------  
+@init
+//-------------------------------
+
+//FFTSIZE=16384; 
+FFTSIZE=2048; 
+
+
+OVERLAPS=4;
+FFTWIN=1; 
+
+
+STR_HELP = STR_HELP1=1;
+STR_HELP2=2;
+STR_HELP3=3;
+STR_HELP4=4;
+
+STR_CUR_SNAP = 10;
+STR_TEMP_LABEL = 11;
+STR_POINT_LABEL = 12;
+STR_GRAPH_LABEL = 13;
+
+STR_INFO = 20;
+STR_POINT_INFO = 30;
+
+STR_POINT_NAMES = 100;
+STR_LOG = 200;
+
+
+function todb(x) (
+	x<=0 ? -99999 : log(x)*8.685889638065035; 
+);
+
+function fromdb(x)(
+    exp(0.11512925464970229*x);
+);
+
+
+function clip(x, minx, maxx) (
+	x<minx ? x=minx;
+	x>maxx ? x=maxx;
+	x;
+);
+
+// # norm 2 physic
+
+function normToPhisicX(x) (
+	graphLeft+graphWidth*x;
+);
+
+
+function normToPhisicY(y) (
+	graphBottom-graphHeight*y;
+);
+
+
+function phisicToNormX(x) (
+	(x-graphLeft)/graphWidth;
+);
+
+
+function phisicToNormY(y) (
+	(graphBottom-y)/graphHeight;
+);
+
+function mod(a,b) (
+	a==0 || b==0 ? 0 : a-b*floor(a/b);
+);
+// L O G =========================
+
+N_LOG=13;
+
+function log.get() local(i, t) (
+	i=0; 
+	t = log_area[0];
+	loop(N_LOG-1, 
+		log_area[i] = log_area[i+1];
+		i+=1;
+	);
+	log_area[N_LOG-1] = t;
+	t;
+);
+
+function log.init() local(i) (
+	log_area = LOG_MEMORY;
+	i=0; 
+	loop(N_LOG, 
+		log_area[i] = STR_LOG+i;
+		sprintf(log_area[i], "init %d %d", i, log_area[i]);
+		i+=1
+	);
+);
+
+function log.draw() local(i x y w h) (
+
+	gfx_setfont(1,"verdana", 12);
+	x = normToPhisicX(1)-5;
+	y = normToPhisicY(0)-25;
+
+	i=N_LOG-1;
+	loop(N_LOG,
+		strcmp(log_area[i], "") ?(
+			gfx_measurestr(log_area[i],w,h);
+			gfx_x = x-w; 
+			gfx_y = y; 
+			gfx_set(255,255,0,i/N_LOG);
+			gfx_drawstr(log_area[i]);
+			y -=12; 
+		);
+		i -= 1;
+	);
+	gfx_setfont(0);
+);
+
+MALLOC_DEBUG=2;
+local_memalloc_ptr = local_memalloc_start;
+local_memalloc_margin = 8;
+//memalloc_start = __memtop()-600000;
+memalloc_start = 0;
+
+
+function local_memalloc(size) local(x) (
+	local_memalloc_ptr==0 ? local_memalloc_ptr=local_memalloc_start;
+	x = local_memalloc_ptr;
+	local_memalloc_ptr = local_memalloc_ptr + size;
+	
+	local_memalloc_ctr += 1;
+
+	x;
+);
+
+
+function chmemRnd(i) (
+	i+$pi*(i+$pi);
+);
+
+function resetMemalloc() local(i)(
+	a000resetDynMem_cnt += 1;
+	
+	__memory_index = __memory_next = memalloc_start;
+	_testDynMemArea = memalloc(100);
+	
+	i = 0;
+	loop(100,
+		_testDynMemArea[i] = chmemRnd(i);
+		i+=1;
+	);
+);
+
+function resetDynMem() local(i)(
+	resetMemalloc();
+	local_memalloc_ptr = local_memalloc_start;
+);
+
+
+function checkPoint(pref, p) local (e a b) (
+	e = 0;
+	// p<local_memalloc_start? (
+	// 	e+=1;
+	// 	sprintf(log.get(), "%s adr=%d",pref, p);
+	// );
+	
+	a = p[SNAP_MLEFT]; b = p+N_INITIAL_PARAMETERS;
+	a!=b ? (
+		sprintf(log.get(), "%s mleft atteso:%d trovato:%d", pref, b, a);
+		e+= 1;
+	);
+
+	a = p[SNAP_FLEFT]; b = p[SNAP_MLEFT] + HALF_FFTSIZE;
+	a!=b ? (
+		sprintf(log.get(), "%s fleft atteso:%d trovato:%d", pref, b, a);
+		e+= 1;
+	);
+
+	a = p[SNAP_MRIGHT]; b =  p[SNAP_FLEFT] + HALF_FFTSIZE;
+	a!=b ? (
+		sprintf(log.get(), "%s mright atteso:%d trovato:%d", pref, b, a);
+		e+= 1;
+	);
+
+	a = p[SNAP_FRIGHT]; b =  p[SNAP_MRIGHT] + HALF_FFTSIZE;
+	a!=b ? (
+		sprintf(log.get(), "%s fright atteso:%d trovato:%d", pref, b, a);
+		e+= 1;
+	);
+
+);
+
+function checkDynMem() local(i e p)  (
+	sprintf(log.get(), "check dyn mem");
+	i = 0;
+	e = 0;
+	loop(100,
+		_testDynMemArea[i] != chmemRnd(i) ? (
+			e+=1;	
+			_testDynMemArea[i] = chmemRnd(i);
+		);
+		i+=1;
+	);
+
+	i=0;
+	loop(npoints,
+		p = points[i];
+		sprintf(731, "point[%d]", i);
+		e += checkPoint(731, p);
+		i +=1;
+	);
+	e>0 ? a0000_dynMemErrorSnap +=1;
+
+	e=0;i=0;
+	loop(SNAP_QUEUE_LENGTH,
+		p = snapQueue[i];
+		sprintf(731, "queue[%d]", i);
+		e += checkPoint(731, p);
+		i += 1;
+	);
+	e>0 ? a0000_queueErrorSnap +=1;
+);
+
+function usedMemory()(
+	__memory_next;
+);
+
+
+function discretize(x) local(ipart fpart k) (
+	k = .1;
+	ipart = floor(x);
+	fpart = x-ipart; // 0 <= fpart < 1
+	fpart = -k + (1+2*k)*fpart;
+	fpart = clip(fpart, 0, 1);
+	ipart+fpart;
+);
+
+function spow(a, b) (
+	a>=0 ? pow(a,b) : -pow(-a, b);
+);
+
+function elapsed() (
+	time_precise()-tstart;
+);
+
+_fToKeyA = 12/log(2);
+_fToKeyB = 69-log(440)*12/log(2);
+function fToKey(f) (
+	log(f)*_fToKeyA + _fToKeyB;
+);
+
+
+

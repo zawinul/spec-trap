@@ -1,0 +1,110 @@
+//-------------------------------  
+@init
+//-------------------------------
+
+function _put(x) (
+	serializeBase[serializeCursor] = x;
+	serializeCursor+=1;
+);
+
+
+function _putn(x, n) local(i) (
+	i=0; loop(n,
+		serializeBase[serializeCursor] = x[i];
+		serializeCursor+=1;
+		i+=1;
+	);
+);
+
+function _get() local(x) (
+	x = serializeBase[serializeCursor];
+	serializeCursor += 1;
+	x;
+);
+
+
+function _getn(dest, n) local() (
+	memcpy(dest, serializeBase+serializeCursor, n);
+	serializeCursor += n;
+);
+
+function packetRead(area, size) local(psize nread) (
+	while(size>0) (
+		psize = min(size, 1000);
+		nread = file_mem(0, area, psize);
+		area+= nread;
+		size -= nread;
+	);
+);
+
+
+function packetWrite(area, size) local(psize nwrite) (
+	while(size>0) (
+		psize = min(size, 1000);
+		nwrite = file_mem(0, area, psize);
+		area += nwrite;
+		size -= nwrite;
+	);
+);
+
+
+function serializeFFTSnaps() local(i size) (
+
+	//serializeBase = usedMemory()+1000;
+	serializeBase = 1000000;
+	serializeCursor = 0;
+
+	_put(npoints);
+	_put(pvSnapSize());
+	i = 0;
+	loop(npoints,
+		_putn(points[i], pvSnapSize());
+		i+=1;
+	);
+
+	size = serializeCursor;
+	file_var(0, size);
+	//file_mem(0, serializeBase, size);
+	packetWrite(serializeBase, size);
+	i=0; 
+	loop(npoints,
+		file_string(0, STR_POINT_NAMES+i); 
+		i+=1;
+	);
+);
+
+function deserializeFFTSnaps() local(i size snap ptr) (
+
+	//serializeBase = usedMemory()+1000;
+	serializeBase = 5000000;
+	serializeCursor = 0;
+
+	file_var(0, size);
+	a000_deserialize_size = size;
+	//file_mem(0, serializeBase, size);
+	packetRead(serializeBase, size);
+
+
+	npoints = _get();
+	a000_deserialize_npoints = npoints;
+	snapsize = _get();
+
+	i = 0;
+	loop(npoints,
+		points[i] = ptr = createPVSnap();
+		_getn(ptr, snapsize);
+
+		ptr[SNAP_MLEFT] = ptr+N_INITIAL_PARAMETERS;
+		ptr[SNAP_FLEFT] = ptr[SNAP_MLEFT] + HALF_FFTSIZE;
+		ptr[SNAP_MRIGHT] = ptr[SNAP_FLEFT] + HALF_FFTSIZE;
+		ptr[SNAP_FRIGHT] = ptr[SNAP_MRIGHT] + HALF_FFTSIZE;
+		i += 1;
+	);
+
+	i=0; 
+	loop(npoints, 
+		file_string(0, STR_POINT_NAMES+i); 
+		i+=1;
+	);
+);
+
